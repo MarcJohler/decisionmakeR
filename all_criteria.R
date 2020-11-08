@@ -703,7 +703,14 @@ extreme_point_finder_rcdd <- function(number_of_states, a1 = NULL, b1 = NULL, a2
   if (validcdd(hrep)) {
     vrep <- scdd(d2q(hrep), representation = "H")$output
     vrep <- q2d(vrep[, -c(1, 2)])
-    return(vrep)
+    
+    # check if there is a feasible solution
+    if (nrow(vrep) == 0) {
+      stop("There is no feasible solution")
+    }
+    else {
+      return(vrep)
+    }
   }
 }
 
