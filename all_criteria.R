@@ -250,6 +250,47 @@ check_probability_consistency <- function(number_of_states, a1, a2, b1, b2, boun
   return(boundaries)
 }
 
+generate_probability_constraints <- function(number_of_states, a1, a2, b1, b2, boundaries, ordinal_structure) {
+  # additional part because constraints from state probability requirements need to be included
+  # first add indicators for the states to the a1-matrix
+  # and their respective boundary to the b1-vector
+  for (k in 1:nrow(boundaries)) {
+    a1 <- rbind(a1, rep(0, number_of_states))
+    a1[nrow(a1), k] <- 1
+    b1 <- c(b1, boundaries[k, 2])
+    a1 <- rbind(a1, rep(0, number_of_states))
+    a1[nrow(a1), k] <- -1
+    b1 <- c(b1, (-1) * boundaries[k, 1])
+  }
+  # then set indicators for the ordinal relations between states:
+  # dominating state --> -1, dominated state --> 1
+  # the corresponding entry in b1 will be 0
+  if (!is.null(ordinal_structure)) {
+    for (k in 1:length(ordinal_structure)) {
+      current_order <- ordinal_structure[[k]]
+      for (j in 1:(length(current_order) - 1)) {
+        a1 <- rbind(a1, rep(0, number_of_states))
+        a1[nrow(a1), current_order[j]] <- -1
+        a1[nrow(a1), current_order[j + 1]] <- 1
+        b1 <- c(b1, 0)
+      }
+    }
+  }
+  
+  # the sum of the states probabilities must equal 1
+  a2 <- rbind(a2, rep(1, number_of_states))
+  b2 <- c(b2, 1)
+  
+  # checking for redundant constraints and excluding them
+  hrep <- makeH(a1, b1, a2, b2, x = NULL)
+  redundant_rows <- redundant(hrep)$redundant
+  if (!is.null(redundant_rows)) {
+    hrep <- hrep[-redundant_rows, ]
+  }
+  
+  return(hrep)
+}
+  
 #check of possible priori 
 check_priori_requirements <- function(panel,priori){
   assert_atomic_vector(priori, len = ncol(panel))
@@ -290,6 +331,7 @@ check_preference_measure <- function(number_of_acts, number_of_states, measure, 
 
 #check input data of a preference system
 check_preference_relations <- function(number_of_acts, number_of_states, r1_strict, r1_indifferent, r2_strict, r2_indifferent) {
+  
   # the number of acts and states must be represented by strictly positive integerish values
   assert_count(number_of_acts, positive = TRUE)
   assert_count(number_of_states, positive = TRUE)
@@ -400,6 +442,7 @@ check_preference_relations <- function(number_of_acts, number_of_states, r1_stri
 ######### functions for user #########
 #### functions for classic decision theory based on utility table #####
 exclude_dominated <- function(panel, mode = c("utility","loss"), strong_domination = FALSE, exclude_duplicates = FALSE, column_presort = FALSE) {
+  
   # check panel to be a non-trivial utility table with no missing values
   assert_matrix(panel, min.rows =  2, min.cols = 2)
   assert_numeric(panel, any.missing =  FALSE)
@@ -417,7 +460,6 @@ exclude_dominated <- function(panel, mode = c("utility","loss"), strong_dominati
   }
   
   assert_flag(column_presort)
-  
   
   # if there is only one possible act, that act is of course admissible
   if (nrow(panel) == 1) {
@@ -622,6 +664,7 @@ exclude_dominated <- function(panel, mode = c("utility","loss"), strong_dominati
 
 #function to compute the set of extreme points for imprecise probabilities
 extreme_point_finder_rcdd <- function(number_of_states, a1 = NULL, b1 = NULL, a2 = NULL, b2 = NULL, boundaries = matrix(c(0, 1), nrow = number_of_states, ncol = 2, byrow = TRUE), ordinal_structure = NULL) {
+  
   # check requirements for number_of_states
   assert_integerish(number_of_states, len = 1, lower = 2, any.missing = FALSE)
   
@@ -721,37 +764,10 @@ m_maximality_lp <- function(utility_table,  mode = c("utility","loss"), a1 = NUL
     }
     constr_vec <- rep(c(0, 1), number_of_acts - 1)
     
-    # additional part because constraints from state probability requirements need to be included
-    for (k in 1:nrow(boundaries)) {
-      a1 <- rbind(a1, rep(0, number_of_states))
-      a1[nrow(a1), k] <- 1
-      b1 <- c(b1, boundaries[k, 2])
-      a1 <- rbind(a1, rep(0, number_of_states))
-      a1[nrow(a1), k] <- -1
-      b1 <- c(b1, (-1) * boundaries[k, 1])
-    }
+    #compute a H-representation of all the constraints based on the probabilistic information
+    hrep <- generate_probability_constraints(number_of_states, a1, a2, b1, b2, boundaries, ordinal_structure)
     
-    if (!is.null(ordinal_structure)) {
-      for (k in 1:length(ordinal_structure)) {
-        current_order <- ordinal_structure[[k]]
-        for (j in 1:(length(current_order) - 1)) {
-          a1 <- rbind(a1, rep(0, number_of_states))
-          a1[nrow(a1), current_order[j]] <- -1
-          a1[nrow(a1), current_order[j + 1]] <- 1
-          b1 <- c(b1, 0)
-        }
-      }
-    }
-    
-    a2 <- rbind(a2, rep(1, number_of_states))
-    b2 <- c(b2, 1)
-    
-    hrep <- makeH(a1, b1, a2, b2, x = NULL)
-    redundant_rows <- redundant(hrep)$redundant
-    if (!is.null(redundant_rows)) {
-      hrep <- hrep[-redundant_rows, ]
-    }
-    
+    # transforming the H-representation into a constraint-matrix, a constraint-vector and constraint directions for lpSolve
     for (j in 1:nrow(hrep)) {
       for (k in 1:(number_of_acts - 1)) {
         constr_mat <- rbind(constr_mat, rep(0, number_of_var))
@@ -761,6 +777,8 @@ m_maximality_lp <- function(utility_table,  mode = c("utility","loss"), a1 = NUL
       }
     }
     constr_dir <- c(constr_dir, rep("<=", nrow(hrep) * (number_of_acts - 1)))
+    
+    # one optimizes over the sum of all optimization parameters or all probabilities for each comparison
     objective <- c(rep(1, number_of_states * (number_of_acts - 1)))
     
     # if optimal value is equal to the number of acts - 1, then act i can be considered as M-maximal
@@ -769,6 +787,7 @@ m_maximality_lp <- function(utility_table,  mode = c("utility","loss"), a1 = NUL
       m_maximal <- c(m_maximal, i)
     }
   }
+  #E-admissible acts are also M-maximal
   m_maximal <- c(m_maximal, e_admissible_indices)
   output <- rbind(utility_table[m_maximal, ])
   row.names(output) <- row.names(utility_table)[m_maximal]
@@ -777,6 +796,7 @@ m_maximality_lp <- function(utility_table,  mode = c("utility","loss"), a1 = NUL
 
 # function to compute the M-maximal acts
 m_maximality <- function(panel, mode = c("utility","loss"), method = c("ep", "lp"), filter_admissible = TRUE, a1 = NULL, b1 = NULL, a2 = NULL, b2 = NULL, ordinal_structure = NULL, boundaries = matrix(c(0, 1), nrow = ncol(panel), ncol = 2, byrow = TRUE)) {
+  
   # check method to be a valid value
   method <- match.arg(method)
   
@@ -823,6 +843,7 @@ m_maximality <- function(panel, mode = c("utility","loss"), method = c("ep", "lp
 
 # function to compute the E-admissible acts
 e_admissibility <- function(panel, mode = c("utility","loss"), filter_strategy = c("admissible"), a1 = NULL, b1 = NULL, a2 = NULL, b2 = NULL, ordinal_structure = NULL, boundaries = matrix(c(0, 1), nrow = ncol(panel), ncol = 2, byrow = TRUE)) {
+  
   # check panel to be a non-trivial utility table with no missing values
   assert_matrix(panel, min.rows =  2, min.cols = 2)
   assert_numeric(panel, any.missing =  FALSE)
@@ -883,43 +904,18 @@ e_admissibility <- function(panel, mode = c("utility","loss"), filter_strategy =
     }
     constr_vec <- rep(c(0, 1), number_of_acts - 1)
     
-    # additional part because constraints from state probability requirements need to be included
-    for (k in 1:nrow(boundaries)) {
-      a1 <- rbind(a1, rep(0, number_of_states))
-      a1[nrow(a1), k] <- 1
-      b1 <- c(b1, boundaries[k, 2])
-      a1 <- rbind(a1, rep(0, number_of_states))
-      a1[nrow(a1), k] <- -1
-      b1 <- c(b1, (-1) * boundaries[k, 1])
-    }
+    #compute a H-representation of all the constraints based on the probabilistic information
+    hrep <- generate_probability_constraints(number_of_states, a1, a2, b1, b2, boundaries, ordinal_structure)
     
-    if (!is.null(ordinal_structure)) {
-      for (k in 1:length(ordinal_structure)) {
-        current_order <- ordinal_structure[[k]]
-        for (j in 1:(length(current_order) - 1)) {
-          a1 <- rbind(a1, rep(0, number_of_states))
-          a1[nrow(a1), current_order[j]] <- -1
-          a1[nrow(a1), current_order[j + 1]] <- 1
-          b1 <- c(b1, 0)
-        }
-      }
-    }
-    
-    a2 <- rbind(a2, rep(1, number_of_states))
-    b2 <- c(b2, 1)
-    
-    hrep <- makeH(a1, b1, a2, b2, x = NULL)
-    redundant_rows <- redundant(hrep)$redundant
-    if (!is.null(redundant_rows)) {
-      hrep <- hrep[-redundant_rows, ]
-    }
-    
+    # transforming the H-representation into a constraint-matrix, a constraint-vector and constraint directions for lpSolve
     for (j in 1:nrow(hrep)) {
       constr_mat <- rbind(constr_mat, rep(0, number_of_states))
       constr_mat[nrow(constr_mat), ] <- hrep[j, -(1:2)] * (-1)
       constr_vec <- c(constr_vec, hrep[j, 2])
     }
     constr_dir <- c(constr_dir, rep("<=", nrow(hrep)))
+    
+    # one optimizes over the sum of all optimization parameters or all probabilities
     objective <- c(rep(1, number_of_states))
     
     # if optimal value is equal to 1, then act i can be considered as E-admissible
@@ -934,6 +930,7 @@ e_admissibility <- function(panel, mode = c("utility","loss"), filter_strategy =
 
 #function to compute the E-Epsilon-Admissible acts for a certain Epsilon
 e_epsilon_admissibility <- function(panel, mode = c("utility","loss"), filter_strategy = c("admissible"), a1 = NULL, b1 = NULL, a2 = NULL, b2 = NULL, ordinal_structure = NULL, boundaries = matrix(c(0, 1), nrow = ncol(panel), ncol = 2, byrow = TRUE), epsilon = 0) {
+  
   # check panel to be a non-trivial utility table with no missing values
   assert_matrix(panel, min.rows =  2, min.cols = 2)
   assert_numeric(panel, any.missing =  FALSE)
@@ -1035,37 +1032,10 @@ e_epsilon_admissibility <- function(panel, mode = c("utility","loss"), filter_st
     }
     constr_vec <- rep(c(0, 1), number_of_acts - 1)
     
-    # additional part because constraints from state probability requirements need to be included
-    for (k in 1:nrow(boundaries)) {
-      a1 <- rbind(a1, rep(0, number_of_states))
-      a1[nrow(a1), k] <- 1
-      b1 <- c(b1, boundaries[k, 2])
-      a1 <- rbind(a1, rep(0, number_of_states))
-      a1[nrow(a1), k] <- -1
-      b1 <- c(b1, (-1) * boundaries[k, 1])
-    }
+    #compute a H-representation of all the constraints based on the probabilistic information
+    hrep <- generate_probability_constraints(number_of_states, a1, a2, b1, b2, boundaries, ordinal_structure)
     
-    if (!is.null(ordinal_structure)) {
-      for (k in 1:length(ordinal_structure)) {
-        current_order <- ordinal_structure[[k]]
-        for (j in 1:(length(current_order) - 1)) {
-          a1 <- rbind(a1, rep(0, number_of_states))
-          a1[nrow(a1), current_order[j]] <- -1
-          a1[nrow(a1), current_order[j + 1]] <- 1
-          b1 <- c(b1, 0)
-        }
-      }
-    }
-    
-    a2 <- rbind(a2, rep(1, number_of_states))
-    b2 <- c(b2, 1)
-    
-    hrep <- makeH(a1, b1, a2, b2, x = NULL)
-    redundant_rows <- redundant(hrep)$redundant
-    if (!is.null(redundant_rows)) {
-      hrep <- hrep[-redundant_rows, ]
-    }
-    
+    # transforming the H-representation into a constraint-matrix, a constraint-vector and constraint directions for lpSolve
     for (j in 1:nrow(hrep)) {
       for (k in 1:(number_of_acts - 1)) {
         constr_mat <- rbind(constr_mat, rep(0, number_of_var))
@@ -1076,10 +1046,13 @@ e_epsilon_admissibility <- function(panel, mode = c("utility","loss"), filter_st
     }
     constr_dir <- c(constr_dir, rep("<=", nrow(hrep) * (number_of_acts - 1)))
     
-    # extra constraint for epsilon
+    ## extra constraints for epsilon
+    # use more optimization parameters to avoid absolute difference in constraint matrix
     constr_mat <- cbind(constr_mat, matrix(0, nrow = nrow(constr_mat), ncol = number_of_states * 2))
     number_of_var_new <- ncol(constr_mat)
     
+    # each states probabilities for all comparisons of acts must be bounded,
+    # by an upper boundary as well as an lower boundary...
     for (j in 1:number_of_states) {
       for (l in 1:(number_of_acts - 1)) {
         constr_mat <- rbind(constr_mat, rep(0, number_of_var_new))
@@ -1090,6 +1063,7 @@ e_epsilon_admissibility <- function(panel, mode = c("utility","loss"), filter_st
         constr_mat[nrow(constr_mat), number_of_states * (l - 1) + j] <- 1
       }
     }
+    # the sum of every upper boundary - its corresponding lower boundary may not exceed epsilon
     constr_mat <- rbind(constr_mat, rep(0, number_of_var_new))
     constr_mat[nrow(constr_mat), (number_of_var + 1):(number_of_var + number_of_states)] <- -1
     constr_mat[nrow(constr_mat), (number_of_var + number_of_states + 1):number_of_var_new] <- 1
@@ -1099,6 +1073,7 @@ e_epsilon_admissibility <- function(panel, mode = c("utility","loss"), filter_st
     constr_vec <- c(constr_vec, new_constraint_rightside)
     constr_dir <- c(constr_dir, rep("<=", length(new_constraint_rightside)))
     
+    # one optimizes over optimization parameters representing the states probabilities for each comparison
     objective <- c(rep(1, number_of_states * (number_of_acts - 1)), rep(0, number_of_states * 2))
     
     # if the optimal value of the problem equals the number of acts - 1 then act i is optimal in the sense of E-epsilon-admissibility
@@ -1107,6 +1082,7 @@ e_epsilon_admissibility <- function(panel, mode = c("utility","loss"), filter_st
       e_epsilon_admissible <- c(e_epsilon_admissible, i)
     }
   }
+  #E-admissible acts are also E-epsilon-admissible for every epsilon
   e_epsilon_admissible <- c(e_admissible_indices, e_epsilon_admissible)
   output <- rbind(utility_table[e_epsilon_admissible, ])
   row.names(output) <- row.names(utility_table)[e_epsilon_admissible]
@@ -1175,37 +1151,10 @@ e_admissibility_extent <- function(panel, mode = c("utility","loss"), measure = 
       }
       constr_vec <- rep(c(0, 1), 2 * (number_of_acts - 1))
       
-      # additional part because constraints from state probability requirements need to be included
-      for (k in 1:nrow(boundaries)) {
-        a1 <- rbind(a1, rep(0, number_of_states))
-        a1[nrow(a1), k] <- 1
-        b1 <- c(b1, boundaries[k, 2])
-        a1 <- rbind(a1, rep(0, number_of_states))
-        a1[nrow(a1), k] <- -1
-        b1 <- c(b1, (-1) * boundaries[k, 1])
-      }
+      #compute a H-representation of all the constraints based on the probabilistic information
+      hrep <- generate_probability_constraints(number_of_states, a1, a2, b1, b2, boundaries, ordinal_structure)
       
-      if (!is.null(ordinal_structure)) {
-        for (k in 1:length(ordinal_structure)) {
-          current_order <- ordinal_structure[[k]]
-          for (j in 1:(length(current_order) - 1)) {
-            a1 <- rbind(a1, rep(0, number_of_states))
-            a1[nrow(a1), current_order[j]] <- -1
-            a1[nrow(a1), current_order[j + 1]] <- 1
-            b1 <- c(b1, 0)
-          }
-        }
-      }
-      
-      a2 <- rbind(a2, rep(1, number_of_states))
-      b2 <- c(b2, 1)
-      
-      hrep <- makeH(a1, b1, a2, b2, x = NULL)
-      redundant_rows <- redundant(hrep)$redundant
-      if (!is.null(redundant_rows)) {
-        hrep <- hrep[-redundant_rows, ]
-      }
-      
+      # transforming the H-representation into a constraint-matrix, a constraint-vector and constraint directions for lpSolve
       for (j in 1:nrow(hrep)) {
         for (k in 1:2) {
           constr_mat <- rbind(constr_mat, rep(0, number_of_var))
@@ -1257,37 +1206,10 @@ e_admissibility_extent <- function(panel, mode = c("utility","loss"), measure = 
         }
       }
       
-      # additional part because constraints from state probability requirements need to be included
-      for (k in 1:nrow(boundaries)) {
-        a1 <- rbind(a1, rep(0, number_of_states))
-        a1[nrow(a1), k] <- 1
-        b1 <- c(b1, boundaries[k, 2])
-        a1 <- rbind(a1, rep(0, number_of_states))
-        a1[nrow(a1), k] <- -1
-        b1 <- c(b1, (-1) * boundaries[k, 1])
-      }
+      #compute a H-representation of all the constraints based on the probabilistic information
+      hrep <- generate_probability_constraints(number_of_states, a1, a2, b1, b2, boundaries, ordinal_structure)
       
-      if (!is.null(ordinal_structure)) {
-        for (k in 1:length(ordinal_structure)) {
-          current_order <- ordinal_structure[[k]]
-          for (j in 1:(length(current_order) - 1)) {
-            a1 <- rbind(a1, rep(0, number_of_states))
-            a1[nrow(a1), current_order[j]] <- -1
-            a1[nrow(a1), current_order[j + 1]] <- 1
-            b1 <- c(b1, 0)
-          }
-        }
-      }
-      
-      a2 <- rbind(a2, rep(1, number_of_states))
-      b2 <- c(b2, 1)
-      
-      hrep <- makeH(a1, b1, a2, b2, x = NULL)
-      redundant_rows <- redundant(hrep)$redundant
-      if (!is.null(redundant_rows)) {
-        hrep <- hrep[-redundant_rows, ]
-      }
-      
+      # transforming the H-representation into a constraint-matrix, a constraint-vector and constraint directions for lpSolve
       for (j in 1:nrow(hrep)) {
         constraint_j <- hrep[j, -(1:2)] * (-1)
         for (k in 1:number_of_states) {
@@ -1311,6 +1233,7 @@ e_admissibility_extent <- function(panel, mode = c("utility","loss"), measure = 
 
 # function to compute the optimal acts with respect to Gamma-Maximin
 gamma_maximin <- function(panel, mode = c("utility","loss"), randomized_acts = TRUE, filter_admissible = TRUE, a1 = NULL, b1 = NULL, a2 = NULL, b2 = NULL, ordinal_structure = NULL, boundaries = matrix(c(0, 1), nrow = ncol(panel), ncol = 2, byrow = TRUE)) {
+  
   # check panel to be a non-trivial utility table with no missing values
   assert_matrix(panel, min.rows =  2, min.cols = 2)
   assert_numeric(panel, any.missing =  FALSE)
@@ -1392,41 +1315,13 @@ gamma_maximin <- function(panel, mode = c("utility","loss"), randomized_acts = T
     number_of_acts <- nrow(utility_table)
     number_of_states <- ncol(utility_table)
     
-    # states probabibilites sum must equal 1
+    # states' probabilities sum must equal 1
     constr_mat <- matrix(rep(1, number_of_states), nrow = 1, ncol = number_of_states)
     constr_vec <- c(1)
     constr_dir <- c("==")
     
-    # additional part because constraints from state probability requirements need to be included
-    for (k in 1:nrow(boundaries)) {
-      a1 <- rbind(a1, rep(0, number_of_states))
-      a1[nrow(a1), k] <- 1
-      b1 <- c(b1, boundaries[k, 2])
-      a1 <- rbind(a1, rep(0, number_of_states))
-      a1[nrow(a1), k] <- -1
-      b1 <- c(b1, (-1) * boundaries[k, 1])
-    }
-    
-    if (!is.null(ordinal_structure)) {
-      for (k in 1:length(ordinal_structure)) {
-        current_order <- ordinal_structure[[k]]
-        for (j in 1:(length(current_order) - 1)) {
-          a1 <- rbind(a1, rep(0, number_of_states))
-          a1[nrow(a1), current_order[j]] <- -1
-          a1[nrow(a1), current_order[j + 1]] <- 1
-          b1 <- c(b1, 0)
-        }
-      }
-    }
-    
-    a2 <- rbind(a2, rep(1, number_of_states))
-    b2 <- c(b2, 1)
-    
-    hrep <- makeH(a1, b1, a2, b2, x = NULL)
-    redundant_rows <- redundant(hrep)$redundant
-    if (!is.null(redundant_rows)) {
-      hrep <- hrep[-redundant_rows, ]
-    }
+    #compute a H-representation of all the constraints based on the probabilistic information
+    hrep <- generate_probability_constraints(number_of_states, a1, a2, b1, b2, boundaries, ordinal_structure)
     
     for (j in 1:nrow(hrep)) {
       constr_mat <- rbind(constr_mat, rep(0, number_of_states))
@@ -1540,36 +1435,8 @@ gamma_maximin <- function(panel, mode = c("utility","loss"), randomized_acts = T
     number_of_acts <- nrow(utility_table)
     number_of_states <- ncol(utility_table)
     
-    # additional part because constraints from state probability requirements need to be included
-    for (k in 1:nrow(boundaries)) {
-      a1 <- rbind(a1, rep(0, number_of_states))
-      a1[nrow(a1), k] <- 1
-      b1 <- c(b1, boundaries[k, 2])
-      a1 <- rbind(a1, rep(0, number_of_states))
-      a1[nrow(a1), k] <- -1
-      b1 <- c(b1, (-1) * boundaries[k, 1])
-    }
-    
-    if (!is.null(ordinal_structure)) {
-      for (k in 1:length(ordinal_structure)) {
-        current_order <- ordinal_structure[[k]]
-        for (j in 1:(length(current_order) - 1)) {
-          a1 <- rbind(a1, rep(0, number_of_states))
-          a1[nrow(a1), current_order[j]] <- -1
-          a1[nrow(a1), current_order[j + 1]] <- 1
-          b1 <- c(b1, 0)
-        }
-      }
-    }
-    
-    a2 <- rbind(a2, rep(1, number_of_states))
-    b2 <- c(b2, 1)
-    
-    hrep <- makeH(a1, b1, a2, b2, x = NULL)
-    redundant_rows <- redundant(hrep)$redundant
-    if (!is.null(redundant_rows)) {
-      hrep <- hrep[-redundant_rows, ]
-    }
+    #compute a H-representation of all the constraints based on the probabilistic information
+    hrep <- generate_probability_constraints(number_of_states, a1, a2, b1, b2, boundaries, ordinal_structure)
     
     # This is solved via a dual programming problem where there are two optimization variables for each constraint of the H-representation of the probability requirements, one parameter per act plus two additional slack variables
     number_of_var <- 2 + nrow(hrep) * 2 + number_of_acts
@@ -1716,7 +1583,7 @@ hodges_lehmann <- function(panel, mode = c("utility","loss"), priori = NULL, tru
     }
   }
   else if (randomized_acts == TRUE) { 
-    # if randomized acts are considered one can generate the optimal criterion by solving a linear programming problem
+    # if randomized acts are considered one can generate the optimal criterion by solving the following lp problem
     if (filter_admissible == TRUE) {
       admissible_acts <- exclude_dominated(panel, mode, FALSE, FALSE)
       utility_table <- rbind(panel[admissible_acts, ])
@@ -1730,15 +1597,19 @@ hodges_lehmann <- function(panel, mode = c("utility","loss"), priori = NULL, tru
     number_of_acts <- nrow(utility_table)
     number_of_states <- ncol(utility_table)
     
+    # compute utility expectation
     expectations <- utility_table %*% priori
+    # the sum of the act weights for a randomized act must equal 1
     constr_mat <- matrix(c(rep(0, 2), rep(1, number_of_acts)), nrow = 1, ncol = number_of_acts + 2)
     constr_vec <- c(1)
     constr_dir <- c("==")
     
+    # probabilities must be >= 0
     constr_mat <- rbind(constr_mat, diag(1, ncol(constr_mat)))
     constr_vec <- c(constr_vec, rep(0, ncol(constr_mat)))
     constr_dir <- c(constr_dir, rep(">=", ncol(constr_mat)))
     
+    # two constraints represent the randomized acts worst case
     for (i in 1:number_of_states) {
       constr_mat <- rbind(constr_mat, c(1, -1, (-1) * utility_table[, i]))
     }
@@ -1751,6 +1622,8 @@ hodges_lehmann <- function(panel, mode = c("utility","loss"), priori = NULL, tru
       constr_dir <- c(constr_dir, rep(">=", number_of_states))
     }
     
+    # this represents the criteria value
+    # note that the worst case is split upon the first two optimization parameters
     objective <- c(1 - trust, trust - 1, trust * expectations)
     
     if (mode == "utility") {
@@ -1761,6 +1634,7 @@ hodges_lehmann <- function(panel, mode = c("utility","loss"), priori = NULL, tru
     }
     output <- data.frame(row.names = 1:nrow(utility_table))
     output$action <- row.names(utility_table)
+    # the solution of the optimization problem represents the optimal randomized act
     output$weight <- optimization$solution[-c(1, 2)]
     output <- list(output, optimization$objval)
     return(output)
@@ -1769,6 +1643,7 @@ hodges_lehmann <- function(panel, mode = c("utility","loss"), priori = NULL, tru
 
 # function to compute the Hurwicz-optimal act
 hurwicz <- function(panel, mode = c("utility","loss"), optimism = 0, randomized_acts = TRUE, filter_admissible = TRUE, a1 = NULL, b1 = NULL, a2 = NULL, b2 = NULL, ordinal_structure = NULL, boundaries = matrix(c(0, 1), nrow = ncol(panel), ncol = 2, byrow = TRUE)) {
+  
   # check panel to be a non-trivial utility table with no missing values
   assert_matrix(panel, min.rows =  2, min.cols = 2)
   assert_numeric(panel, any.missing =  FALSE)
@@ -1870,36 +1745,8 @@ hurwicz <- function(panel, mode = c("utility","loss"), optimism = 0, randomized_
     constr_vec <- c(1)
     constr_dir <- c("==")
     
-    # additional part because constraints from state probability requirements need to be included
-    for (k in 1:nrow(boundaries)) {
-      a1 <- rbind(a1, rep(0, number_of_states))
-      a1[nrow(a1), k] <- 1
-      b1 <- c(b1, boundaries[k, 2])
-      a1 <- rbind(a1, rep(0, number_of_states))
-      a1[nrow(a1), k] <- -1
-      b1 <- c(b1, (-1) * boundaries[k, 1])
-    }
-    
-    if (!is.null(ordinal_structure)) {
-      for (k in 1:length(ordinal_structure)) {
-        current_order <- ordinal_structure[[k]]
-        for (j in 1:(length(current_order) - 1)) {
-          a1 <- rbind(a1, rep(0, number_of_states))
-          a1[nrow(a1), current_order[j]] <- -1
-          a1[nrow(a1), current_order[j + 1]] <- 1
-          b1 <- c(b1, 0)
-        }
-      }
-    }
-    
-    a2 <- rbind(a2, rep(1, number_of_states))
-    b2 <- c(b2, 1)
-    
-    hrep <- makeH(a1, b1, a2, b2, x = NULL)
-    redundant_rows <- redundant(hrep)$redundant
-    if (!is.null(redundant_rows)) {
-      hrep <- hrep[-redundant_rows, ]
-    }
+    #compute a H-representation of all the constraints based on the probabilistic information
+    hrep <- generate_probability_constraints(number_of_states, a1, a2, b1, b2, boundaries, ordinal_structure)
     
     for (j in 1:nrow(hrep)) {
       constr_mat <- rbind(constr_mat, rep(0, number_of_states))
