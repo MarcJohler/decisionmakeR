@@ -1745,9 +1745,10 @@ hurwicz <- function(panel, mode = c("utility","loss"), optimism = 0, randomized_
     constr_vec <- c(1)
     constr_dir <- c("==")
     
-    #compute a H-representation of all the constraints based on the probabilistic information
+    # compute a H-representation of all the constraints based on the probabilistic information
     hrep <- generate_probability_constraints(number_of_states, a1, a2, b1, b2, boundaries, ordinal_structure)
     
+    # transforming the H-representation into a constraint-matrix, a constraint-vector and constraint directions for lpSolve
     for (j in 1:nrow(hrep)) {
       constr_mat <- rbind(constr_mat, rep(0, number_of_states))
       constr_mat[nrow(constr_mat), ] <- hrep[j, -(1:2)] * (-1)
@@ -2001,6 +2002,7 @@ hurwicz <- function(panel, mode = c("utility","loss"), optimism = 0, randomized_
       }
       output <- data.frame(row.names = 1:nrow(utility_table))
       output$action <- row.names(utility_table)
+      # the optimal randomized act is induced by the solution of the optimization problem
       output$weight <- weights[-c(1, 2)]
       output <- list(output, current_best)
       return(output)
@@ -2763,7 +2765,7 @@ generalized_interval_expectation <- function(number_of_acts, number_of_states, r
   constr_vec <- c(constr_vec, delta)
   constr_dir <- c(constr_dir, "==")
   
-  # set highest utility/loss value to 1 and lowest to 0
+  # find the act-state-interactions with the highest utility
   maximal_utility <- c()
   for (i in 1:length(r1_strict)) {
     vector_i <- r1_strict[[i]]
@@ -2796,6 +2798,7 @@ generalized_interval_expectation <- function(number_of_acts, number_of_states, r
     }
   }
   
+  # find the act-state-interactions with the lowest utility
   minimal_utility <- c()
   for (i in 1:length(r1_strict)) {
     vector_i <- r1_strict[[i]]
@@ -2828,6 +2831,7 @@ generalized_interval_expectation <- function(number_of_acts, number_of_states, r
     }
   }
   
+  # set the highest utility to 1
   for (i in 1:length(maximal_utility)) {
     indx_i <- round((floor(maximal_utility[i]) - 1) * number_of_states + maximal_utility[i] %% 1 * state_factor)
     constr_mat <- rbind(constr_mat, rep(0, number_of_var))
@@ -2836,6 +2840,7 @@ generalized_interval_expectation <- function(number_of_acts, number_of_states, r
     constr_dir <- c(constr_dir, "==")
   }
   
+  # set the lowest utility to 0
   for (i in 1:length(minimal_utility)) {
     indx_i <- round((floor(minimal_utility[i]) - 1) * number_of_states + minimal_utility[i] %% 1 * state_factor)
     constr_mat <- rbind(constr_mat, rep(0, number_of_var))
@@ -2844,14 +2849,19 @@ generalized_interval_expectation <- function(number_of_acts, number_of_states, r
     constr_dir <- c(constr_dir, "==")
   }
   
+  # basic structure of output intervals
   interval_expectation <- matrix(NA, nrow = number_of_acts, ncol = 2)
   rownames(interval_expectation) <- 1:number_of_acts
   interval_expectation[, 1] <- Inf
   interval_expectation[, 2] <- -Inf
   
+  # compute the set of extreme points
   extreme_points <- extreme_point_finder_rcdd(number_of_states, a1, b1, a2, b2, boundaries, ordinal_structure)
+  
   for (i in 1:number_of_acts) {
     for (j in 1:nrow(extreme_points)) {
+      # minimize and maximize the utility expectation for every extreme point
+      # this will define the interval induced by the possible utilities for the preference system
       objective <- rep(0, number_of_var)
       objective[((i - 1) * number_of_states + 1):(i * number_of_states)] <- extreme_points[j, ]
       minimization <- lp("min", objective, constr_mat, constr_dir, constr_vec)$objval
@@ -2918,6 +2928,7 @@ ps_global_admissibility <- function(number_of_acts, number_of_states, r1_strict,
         constr_mat_iteration <- constr_mat
         for (i2 in 1:number_of_acts) {
           if (i != i2) {
+            # constraints to compare the expected utility of act i with every other act for extreme point j
             constr_mat_iteration <- rbind(constr_mat_iteration, rep(0, number_of_var))
             constr_mat_iteration[nrow(constr_mat_iteration), ((i - 1) * number_of_states + 1):(i * number_of_states)] <- extreme_points[j, ]
             constr_mat_iteration[nrow(constr_mat_iteration), ((i2 - 1) * number_of_states + 1):(i2 * number_of_states)] <- (-1) * extreme_points[j, ]
@@ -2951,6 +2962,7 @@ ps_global_admissibility <- function(number_of_acts, number_of_states, r1_strict,
         i2 <- 1
         for (i2 in 1:number_of_acts) {
           if (i != i2) {
+            # comparison of expected utility of act i with every other act
             constr_mat_iteration <- rbind(constr_mat_iteration, rep(0, number_of_var))
             constr_mat_iteration[nrow(constr_mat_iteration), ((i - 1) * number_of_states + 1):(i * number_of_states)] <- extreme_points[j, ]
             constr_mat_iteration[nrow(constr_mat_iteration), ((i2 - 1) * number_of_states + 1):(i2 * number_of_states)] <- (-1) * extreme_points[j, ]
@@ -3015,13 +3027,14 @@ ps_global_admissibility <- function(number_of_acts, number_of_states, r1_strict,
       for (i2 in 1:number_of_acts) {
         if (i != i2) {
           for (j in 1:nrow(extreme_points)) {
+            # check for every extreme point if there is a utility function for which act i is better than act i2 for every utility
             objective <- rep(0, number_of_var)
             objective[((i2 - 1) * number_of_states + 1):(i2 * number_of_states)] <- extreme_points[j, ]
             objective[((i - 1) * number_of_states + 1):(i * number_of_states)] <- (-1) * extreme_points[j, ]
             
             if (mode == "utility") {
               optimization <- lp("max", objective, constr_mat, constr_dir, constr_vec)
-              # if there is an extreme point for which one can find a utility for which the expectation of act i is strictly smaller, than i is not AM-dominant
+              # if there is an extreme point for which one can find a utility for which the expectation of act i is strictly smaller, then i is not AM-dominant
               if (optimization$objval > 0) {
                 not_admissible <- c(not_admissible, i)
                 break
