@@ -6,6 +6,21 @@ library(rcdd)
 library(checkmate)
 
 ######## input check functions ########
+
+#function to print boundary structure as hint for the user
+boundary_structure_error <- function(number_of_states){
+  message("'boundaries' must have the following structure:")
+  boundaries_structure <- matrix(c(paste("lower_boundary", 1:number_of_states, sep = ""), paste("upper_boundary", 1:number_of_states, sep = "")), number_of_states, 2)
+  row.names(boundaries_structure) <- 1:number_of_states
+  print(head(boundaries_structure, max(5, min(number_of_states, 6 - (number_of_states - 6)))))
+  if (number_of_states > 6) {
+    message("...")
+    rest <- boundaries_structure[-(1:(nrow(boundaries_structure) - 2)), ]
+    row.names(rest) <- (number_of_states - 1):number_of_states
+    print(rest)
+  }
+}
+
 #check of probabilistic information 
 check_probability_consistency <- function(number_of_states, a1, a2, b1, b2, boundaries, ordinal_structure) {
   # check requirements for a1,a2,b1,b2
@@ -60,59 +75,23 @@ check_probability_consistency <- function(number_of_states, a1, a2, b1, b2, boun
   # check requirements on boundaries
   if (!(is.matrix(boundaries) && is.numeric(boundaries))) {
     message("Error: 'boundaries' is not a numeric matrix")
-    message("'boundaries' must have the following structure:")
-    boundaries_structure <- matrix(c(paste("lower_boundary", 1:number_of_states, sep = ""), paste("upper_boundary", 1:number_of_states, sep = "")), number_of_states, 2)
-    row.names(boundaries_structure) <- 1:number_of_states
-    print(head(boundaries_structure, max(5, min(number_of_states, 6 - (number_of_states - 6)))))
-    if (number_of_states > 6) {
-      message("...")
-      rest <- boundaries_structure[-(1:(nrow(boundaries_structure) - 2)), ]
-      row.names(rest) <- (number_of_states - 1):number_of_states
-      print(rest)
-    }
+    boundary_structure_error(number_of_states)
     stop("please redefine 'boundaries'")
   }
   else if (any(dim(boundaries) != c(number_of_states, 2))) {
     message(paste("Error: 'boundaries' has the wrong dimensions - dim(boundaries) must equal", number_of_states, "2"))
-    message("'boundaries' must have the following structure:")
-    boundaries_structure <- matrix(c(paste("lower_boundary", 1:number_of_states, sep = ""), paste("upper_boundary", 1:number_of_states, sep = "")), number_of_states, 2)
-    row.names(boundaries_structure) <- 1:number_of_states
-    print(head(boundaries_structure, max(5, min(number_of_states, 6 - (number_of_states - 6)))))
-    if (number_of_states > 6) {
-      message("...")
-      rest <- boundaries_structure[-(1:(nrow(boundaries_structure) - 2)), ]
-      row.names(rest) <- (number_of_states - 1):number_of_states
-      print(rest)
-    }
+    boundary_structure_error(number_of_states)
     stop("please redefine 'boundaries'")
   }
   else if (sum(boundaries[, 1]) > 1) {
     message("Error: sum of lower boundaries exceeds 1")
-    message("'boundaries' must have the following structure:")
-    boundaries_structure <- matrix(c(paste("lower_boundary", 1:number_of_states, sep = ""), paste("upper_boundary", 1:number_of_states, sep = "")), number_of_states, 2)
-    row.names(boundaries_structure) <- 1:number_of_states
-    print(head(boundaries_structure, max(5, min(number_of_states, 6 - (number_of_states - 6)))))
-    if (number_of_states > 6) {
-      message("...")
-      rest <- boundaries_structure[-(1:(nrow(boundaries_structure) - 2)), ]
-      row.names(rest) <- (number_of_states - 1):number_of_states
-      print(rest)
-    }
+    boundary_structure_error(number_of_states)
     message("it must hold that sum of lower boundaries is smaller than or equal to 1")
     stop("please redefine 'boundaries'")
   }
   else if (sum(boundaries[, 2]) < 1) {
     message("Error: upper boundaries don't conver a probability space")
-    message("'boundaries' must have the following structure:")
-    boundaries_structure <- matrix(c(paste("lower_boundary", 1:number_of_states, sep = ""), paste("upper_boundary", 1:number_of_states, sep = "")), number_of_states, 2)
-    row.names(boundaries_structure) <- 1:number_of_states
-    print(head(boundaries_structure, max(5, min(number_of_states, 6 - (number_of_states - 6)))))
-    if (number_of_states > 6) {
-      message("...")
-      rest <- boundaries_structure[-(1:(nrow(boundaries_structure) - 2)), ]
-      row.names(rest) <- (number_of_states - 1):number_of_states
-      print(rest)
-    }
+    boundary_structure_error(number_of_states)
     message("it must hold that sum of upper boundaries is greater than or equal to 1")
     stop("please redefine 'boundaries'")
   }
@@ -120,31 +99,13 @@ check_probability_consistency <- function(number_of_states, a1, a2, b1, b2, boun
   for (i in 1:nrow(boundaries)) {
     if (boundaries[i, 1] > boundaries[i, 2]) {
       message(paste("Error: boundaries of state", i, "have been specified incorrectly"))
-      message("'boundaries' must have the following structure:")
-      boundaries_structure <- matrix(c(paste("lower_boundary", 1:number_of_states, sep = ""), paste("upper_boundary", 1:number_of_states, sep = "")), number_of_states, 2)
-      row.names(boundaries_structure) <- 1:number_of_states
-      print(head(boundaries_structure, max(5, min(number_of_states, 6 - (number_of_states - 6)))))
-      if (number_of_states > 6) {
-        message("...")
-        rest <- boundaries_structure[-(1:(nrow(boundaries_structure) - 2)), ]
-        row.names(rest) <- (number_of_states - 1):number_of_states
-        print(rest)
-      }
+      boundary_structure_error(number_of_states)
       message(paste("it must hold that lower_boundary", i, "is smaller than or equal to upper_boundary", i))
       stop("please redefine 'boundaries'")
     }
     else if (boundaries[i, 1] < 0 || boundaries[i, 1] > 1 || boundaries[i, 2] < 0 || boundaries[i, 2] > 1) {
       message(paste("Error: boundaries of state", i, "have been specified incorrectly"))
-      message("'boundaries' must have the following structure:")
-      boundaries_structure <- matrix(c(paste("lower_boundary", 1:number_of_states, sep = ""), paste("upper_boundary", 1:number_of_states, sep = "")), number_of_states, 2)
-      row.names(boundaries_structure) <- 1:number_of_states
-      print(head(boundaries_structure, max(5, min(number_of_states, 6 - (number_of_states - 6)))))
-      if (number_of_states > 6) {
-        message("...")
-        rest <- boundaries_structure[-(1:(nrow(boundaries_structure) - 2)), ]
-        row.names(rest) <- (number_of_states - 1):number_of_states
-        print(rest)
-      }
+      boundary_structure_error(number_of_states)
       message(paste("it must hold that all values are element of the interval [0,1]"))
       stop("please redefine 'boundaries'")
     }
