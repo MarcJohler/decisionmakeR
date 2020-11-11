@@ -7,7 +7,7 @@ library(checkmate)
 
 ######## input check functions ########
 
-#function to print boundary structure as hint for the user
+# function to print boundary structure as hint for the user if the boundary input variable is not valid
 boundary_structure_error <- function(number_of_states){
   message("'boundaries' must have the following structure:")
   boundaries_structure <- matrix(c(paste("lower_boundary", 1:number_of_states, sep = ""), paste("upper_boundary", 1:number_of_states, sep = "")), number_of_states, 2)
@@ -21,7 +21,7 @@ boundary_structure_error <- function(number_of_states){
   }
 }
 
-#check of probabilistic information 
+# check of probabilistic information 
 check_probability_consistency <- function(number_of_states, a1, a2, b1, b2, boundaries, ordinal_structure) {
   # check requirements for a1,a2,b1,b2
   # for further information see rcdd documentation (function 'makeH')
@@ -250,7 +250,9 @@ check_probability_consistency <- function(number_of_states, a1, a2, b1, b2, boun
   return(boundaries)
 }
 
+# function to generate the constraints for most of the linear programming problems based on probabilistic information
 generate_probability_constraints <- function(number_of_states, a1, a2, b1, b2, boundaries, ordinal_structure) {
+  
   # additional part because constraints from state probability requirements need to be included
   # first add indicators for the states to the a1-matrix
   # and their respective boundary to the b1-vector
@@ -1091,6 +1093,7 @@ e_epsilon_admissibility <- function(panel, mode = c("utility","loss"), filter_st
 
 #function to compute the E-Admissibility-Extent for some E-admissible acts 
 e_admissibility_extent <- function(panel, mode = c("utility","loss"), measure = c("maximal","uniform"), e_admissible = NULL, a1 = NULL, b1 = NULL, a2 = NULL, b2 = NULL, ordinal_structure = NULL, boundaries = matrix(c(0, 1), nrow = ncol(panel), ncol = 2, byrow = TRUE)) {
+  
   # check panel to be a non-trivial utility table with no missing values
   assert_matrix(panel, min.rows =  2, min.cols = 2)
   assert_numeric(panel, any.missing =  FALSE)
@@ -1524,6 +1527,7 @@ gamma_maximin <- function(panel, mode = c("utility","loss"), randomized_acts = T
 
 # function to compute the optimal Hodges-Lehmann-criterion acts
 hodges_lehmann <- function(panel, mode = c("utility","loss"), priori = NULL, trust = 0, randomized_acts = TRUE, filter_admissible = TRUE) {
+  
   # check panel to be a non-trivial utility table with no missing values
   assert_matrix(panel, min.rows =  2, min.cols = 2)
   assert_numeric(panel, any.missing =  FALSE)
@@ -2012,6 +2016,7 @@ hurwicz <- function(panel, mode = c("utility","loss"), optimism = 0, randomized_
 
 # function to compute the optimal act with respect to Stochastic Dominance
 stochastic_dominance <- function(panel, mode = c("utility","loss"), mode2 = c("joint","pairwise"), priori = NULL, filter_admissible = TRUE, a1 = NULL, b1 = NULL, a2 = NULL, b2 = NULL, ordinal_structure = NULL, boundaries = matrix(c(0, 1), nrow = ncol(panel), ncol = 2, byrow = TRUE)) {
+  
   # check panel to be a non-trivial utility table with no missing values
   assert_matrix(panel, min.rows =  2, min.cols = 2)
   assert_numeric(panel, any.missing =  FALSE)
@@ -2282,6 +2287,7 @@ stochastic_dominance <- function(panel, mode = c("utility","loss"), mode2 = c("j
 
 # function to compute the optimal acts with respect to Statistical Preference 
 statistical_preference <- function(panel, mode = c("utility","loss"), mode2 = c("joint","pairwise"), priori = NULL, optimism = 0, filter_admissible = TRUE, a1 = NULL, b1 = NULL, a2 = NULL, b2 = NULL, ordinal_structure = NULL, boundaries = matrix(c(0, 1), nrow = ncol(panel), ncol = 2, byrow = TRUE)) {
+  
   # check panel to be a non-trivial utility table with no missing values
   assert_matrix(panel, min.rows =  2, min.cols = 2)
   assert_numeric(panel, any.missing =  FALSE)
