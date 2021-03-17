@@ -25,7 +25,7 @@ gamma_maximin(nutzen_matrix, randomized_acts = FALSE, boundaries = boundaries_ex
 e_admissibility(nutzen_matrix, filter_strategy = c("m-maximal", "admissible"), boundaries = boundaries_example)
 
 # detect M-maximal acts
-m_maximality(nutzen_matrix, method = "ep", filter_admissible = TRUE, boundaries = boundaries_example)
+m_maximality(nutzen_matrix, method = "lppar", filter_admissible = TRUE, boundaries = boundaries_example)
 
 # detect E-epsilon-admissible acts for different epsilon values
 e_epsilon_admissibility(nutzen_matrix, filter_strategy = c("m-maximal", "admissible"), boundaries = boundaries_example, epsilon = 0.005)
@@ -66,3 +66,4 @@ hurwicz(example_interval, optimism = 0, randomized_acts = FALSE)
 hurwicz(example_interval, optimism = 1, randomized_acts = FALSE)
 # D_delta_maximix
 hurwicz(example_interval, optimism = 0.4, randomized_acts = FALSE)
+
