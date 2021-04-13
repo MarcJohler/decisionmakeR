@@ -4,13 +4,251 @@ library(tidyverse)
 library(lpSolve)
 library(rcdd)
 library(checkmate)
-library(foreach)
 
-# define how many cores may be used
-doParallel::registerDoParallel(cores = parallel::detectCores() - 1)
+######## input check functions ########
 
+# function to print boundary structure as hint for the user if the boundary input variable is not valid
+boundary_structure_error <- function(number_of_states){
+  message("'boundaries' must have the following structure:")
+  boundaries_structure <- matrix(c(paste("lower_boundary", 1:number_of_states, sep = ""), paste("upper_boundary", 1:number_of_states, sep = "")), number_of_states, 2)
+  row.names(boundaries_structure) <- 1:number_of_states
+  print(head(boundaries_structure, max(5, min(number_of_states, 6 - (number_of_states - 6)))))
+  if (number_of_states > 6) {
+    message("...")
+    rest <- boundaries_structure[-(1:(nrow(boundaries_structure) - 2)), ]
+    row.names(rest) <- (number_of_states - 1):number_of_states
+    print(rest)
+  }
+}
 
-
+# check of probabilistic information 
+check_probability_consistency <- function(number_of_states, a1, a2, b1, b2, boundaries, ordinal_structure) {
+  # check requirements for a1,a2,b1,b2
+  # for further information see rcdd documentation (function 'makeH')
+  if (!is.null(a1)) {
+    assert_matrix(a1, ncols = number_of_states, any.missing = FALSE)
+    assert_numeric(a1)
+    if (is.null(b1)) {
+      #a1 only works together with b1 (see rcdd documentation)
+      stop("please specify 'b1'")
+    }
+  }
+  
+  if (!is.null(a2)) {
+    assert_matrix(a2, ncols = number_of_states, any.missing = FALSE)
+    assert_numeric(a2)
+    if (is.null(b2)) {
+      #a2 only works together with b2 (see rcdd documentation)
+      stop("please specify 'b2'")
+    }
+  }
+  
+  if (!is.null(b1)) {
+    if (is.null(a1)) {
+      stop("please specify 'a1'")
+    }
+    assert(check_numeric(b1, any.missing = FALSE), 
+           check_atomic_vector(b1, len = nrow(a1)),
+           combine = "and"
+    )
+  }
+  
+  if (!is.null(b2)) {
+    if (is.null(a2)) {
+      stop("please specify 'a2'")
+    }
+    assert(check_numeric(b2, any.missing = FALSE), 
+           check_atomic_vector(b2, len = nrow(a1)),
+           combine = "and"
+    )
+  }
+  
+  # check requirements for ordinal_structure if it is defined
+  if (!is.null(ordinal_structure)) {
+    assert_list(ordinal_structure, any.missing = FALSE)
+    for (i in 1:length(ordinal_structure)) {
+      assert_atomic_vector(ordinal_structure[[i]], any.missing = FALSE, min.len = 2)
+      assert_integerish(ordinal_structure[[i]], lower = 1, upper = number_of_states)
+    }
+  }
+  
+  # check requirements on boundaries
+  if (!(is.matrix(boundaries) && is.numeric(boundaries))) {
+    message("Error: 'boundaries' is not a numeric matrix")
+    boundary_structure_error(number_of_states)
+    stop("please redefine 'boundaries'")
+  }
+  else if (any(dim(boundaries) != c(number_of_states, 2))) {
+    message(paste("Error: 'boundaries' has the wrong dimensions - dim(boundaries) must equal", number_of_states, "2"))
+    boundary_structure_error(number_of_states)
+    stop("please redefine 'boundaries'")
+  }
+  else if (sum(boundaries[, 1]) > 1) {
+    message("Error: sum of lower boundaries exceeds 1")
+    boundary_structure_error(number_of_states)
+    message("it must hold that sum of lower boundaries is smaller than or equal to 1")
+    stop("please redefine 'boundaries'")
+  }
+  else if (sum(boundaries[, 2]) < 1) {
+    message("Error: upper boundaries don't conver a probability space")
+    boundary_structure_error(number_of_states)
+    message("it must hold that sum of upper boundaries is greater than or equal to 1")
+    stop("please redefine 'boundaries'")
+  }
+  warning_reminder <- FALSE
+  for (i in 1:nrow(boundaries)) {
+    if (boundaries[i, 1] > boundaries[i, 2]) {
+      message(paste("Error: boundaries of state", i, "have been specified incorrectly"))
+      boundary_structure_error(number_of_states)
+      message(paste("it must hold that lower_boundary", i, "is smaller than or equal to upper_boundary", i))
+      stop("please redefine 'boundaries'")
+    }
+    else if (boundaries[i, 1] < 0 || boundaries[i, 1] > 1 || boundaries[i, 2] < 0 || boundaries[i, 2] > 1) {
+      message(paste("Error: boundaries of state", i, "have been specified incorrectly"))
+      boundary_structure_error(number_of_states)
+      message(paste("it must hold that all values are element of the interval [0,1]"))
+      stop("please redefine 'boundaries'")
+    }
+    if (boundaries[i, 2] == 0) {
+      warning_reminder <- TRUE
+    }
+  }
+  if (warning_reminder) {
+    warning("There is at least one state with upper probability of zero - priori might be degenerated")
+  }
+  
+  ordinal_matrix <- diag(1, nrow = number_of_states, ncol = number_of_states)
+  
+  # transform ordinal_structure to a matrix so that [x,y] = 1 if '...,x,y,...' is contained in at least one vector of 'ordinal_structure' 
+  if (!is.null(ordinal_structure)) {
+    for (a in 1:length(ordinal_structure)) {
+      ordinal_vector <- ordinal_structure[[a]]
+      for (k in (1:(length(ordinal_vector) - 1))) {
+        ordinal_matrix[ordinal_vector[k], ordinal_vector[(k + 1):length(ordinal_vector)]] <- 1
+      }
+    }
+  }
+  
+  # apply transitivity of state dominance, so that [x,y] = 1 if and only if p(x) >= p(y)
+  # this may seem inefficient but it's necessary so that transitivity will be applied completely 
+  for (i in 1:number_of_states) {
+    for (j in 1:number_of_states) {
+      if (ordinal_matrix[i, j] > 0) {
+        ordinal_matrix[i, ] <- ordinal_matrix[i, ] + ordinal_matrix[j, ]
+      }
+      else if (ordinal_matrix[j, i] > 0) {
+        ordinal_matrix[j, ] <- ordinal_matrix[j, ] + ordinal_matrix[i, ]
+      }
+    }
+  }
+  # transform it to a binary relation again 
+  ordinal_matrix <- sign(ordinal_matrix)
+  
+  # define lower boundaries by applying transitivity for each dominated state
+  for (i in 1:number_of_states) {
+    
+    #for computational reasons let say that a state will always dominate itself
+    ordinal_matrix[i, i] <- 1
+    
+    if (sum(ordinal_matrix[i, ]) == number_of_states) {
+      # if the state dominates all of the other states, the lower boundary is either given by:
+      
+      # 1 divided through the number of all states ...
+      tmp <- 1 / number_of_states
+      
+      # ... or by the maximal lower boundary of all states ...
+      max <- max(boundaries[, 1])
+      
+      #... depending on what is larger
+      if (tmp > max) {
+        boundaries[i, 1] <- tmp
+      }
+      else {
+        boundaries[i, 1] <- max
+      }
+    }
+    else {
+      #otherwise the lower boundary will be changed to the highest lower boundary of any state dominated by the corresponding state
+      tmp <- max(boundaries[as.logical(ordinal_matrix[i, ]), 1])
+      if (tmp > boundaries[i, 1]) {
+        boundaries[i, 1] <- tmp
+      }
+    }
+  }
+  
+  states_order <- (1:number_of_states)[order(rowSums(ordinal_matrix), decreasing = TRUE)]
+  
+  # define upper boundaries (pre-sorting is necessary because dominators' boundaries will have an impact)
+  # note that the upper boundaries will be too wide, since the computation of the actual boundaries is quite difficult
+  for (i in states_order) {
+    
+    # compute all of the states which dominate the corresponding state
+    dominators <- as.logical(ordinal_matrix[, i])
+    
+    if (length(dominators) != 0) {
+      # the upper boundary is defined by the minimal upper boundary of the dominating states
+      tmp <- min(boundaries[dominators, 2])
+    }
+    else {
+      tmp <- 1
+    }
+    
+    # OR 1 minus the sum of the lower boundaries of all other states
+    tmp2 <- 1 - sum(boundaries[-i, 1])
+    
+    # the minimum will define the upper boundary 
+    tmp <- min(tmp, tmp2)
+    if (tmp < boundaries[i, 2]) {
+      boundaries[i, 2] <- tmp
+    }
+  }
+  
+  # if the lower boundaries sum up to 1 there is only one solution
+  if (sum(boundaries[, 1]) == 1) {
+    return(rbind(boundaries[, 1]))
+  }
+  
+  # find logically induced lower boundaries
+  for (i in 1:number_of_states) {
+    max_without_i <- sum(boundaries[-i, 2])
+    if (max_without_i < 1) {
+      if (boundaries[i, 1] < 1 - max_without_i) {
+        boundaries[i, 1] <- 1 - max_without_i
+      }
+    }
+  }
+  
+  # check further requirments on boundaries
+  # the sum of the lower boundaries must be maximal 1 and the sum of the upper boundaries must be minimal 1
+  if ((round(sum(boundaries[, 1]), 10) > 1) || (round(sum(boundaries[, 2]), 10) < 1)) {
+    stop("'ordinal_structure' and 'boundaries' contain contradictory requirements")
+  }
+  
+  for (i in 1:number_of_states) {
+    # no state may have an upper boundary higher than its lower boundary
+    if (round(boundaries[i, 1], 10) > round(boundaries[i, 2], 10)) {
+      stop("'ordinal_structure' and 'boundaries' contain contradictory requirements")
+    }
+    dominated <- (1:number_of_states)[(ordinal_matrix - diag(number_of_states, number_of_states))[i, ] == 1]
+    # dominated states are not supposed to have a higher boundary value than their dominator
+    for (j in dominated) {
+      if (boundaries[i, 1] < boundaries[j, 1] || boundaries[i, 2] < boundaries[j, 2]) {
+        stop("'ordinal_structure' and 'boundaries' contain contradictory requirements")
+      }
+    }
+  }
+  
+  if (warning_reminder == FALSE) {
+    # if there is a state with upper boundary of 0, give a warning to the user
+    for (i in 1:nrow(boundaries)) {
+      if (boundaries[i, 2] == 0) {
+        warning("There is at least one state with upper probability of zero - priori might be degenerated")
+        break
+      }
+    }
+  }
+  return(boundaries)
+}
 
 # function to generate the constraints for most of the linear programming problems based on probabilistic information
 generate_probability_constraints <- function(number_of_states, a1, a2, b1, b2, boundaries, ordinal_structure) {
@@ -54,7 +292,7 @@ generate_probability_constraints <- function(number_of_states, a1, a2, b1, b2, b
   
   return(hrep)
 }
-  
+
 #check of possible priori 
 check_priori_requirements <- function(panel,priori){
   assert_atomic_vector(priori, len = ncol(panel))
@@ -205,6 +443,226 @@ check_preference_relations <- function(number_of_acts, number_of_states, r1_stri
 
 ######### functions for user #########
 #### functions for classic decision theory based on utility table #####
+exclude_dominated <- function(panel, mode = c("utility","loss"), strong_domination = FALSE, exclude_duplicates = FALSE, column_presort = FALSE) {
+  
+  # check panel to be a non-trivial utility table with no missing values
+  assert_matrix(panel, min.rows =  2, min.cols = 2)
+  assert_numeric(panel, any.missing =  FALSE)
+  
+  # mode must be one of 'utility', 'loss'
+  mode <- match.arg(mode)
+  
+  #'strong_domination', 'column_presort' and 'exclude_duplicates' must be single logical values
+  assert_flag(strong_domination)
+  if (strong_domination == TRUE) {
+    assert_flag(exclude_duplicates, null.ok = TRUE)
+  }
+  else {
+    assert_flag(exclude_duplicates)
+  }
+  
+  assert_flag(column_presort)
+  
+  # if there is only one possible act, that act is of course admissible
+  if (nrow(panel) == 1) {
+    return(1)
+  }
+  
+  number_of_states <- ncol(panel)
+  number_of_acts <- nrow(panel)
+  
+  # Sort acts to be more likely to be dominated to be in the lower rows
+  # Acts cannot be dominated by acts with lower row sums
+  row_sums <- data.frame(indx = 1:number_of_acts, rowSum = rowSums(panel))
+  if (mode == "utility") {
+    row_sums <- row_sums[order(row_sums$rowSum, decreasing = TRUE), ]
+    row_sums <- row_sums$indx
+  }
+  else if (mode == "loss") {
+    row_sums <- row_sums[order(row_sums$rowSum, decreasing = FALSE), ]
+    row_sums <- row_sums$indx
+  }
+  
+  # Sort states to be selected earlier when higher rows have low values (optional; does not always lead to faster processing)
+  if (column_presort) {
+    weighted_panel <- panel
+    
+    #normalize the utility for each state (column)
+    for (j in 1:number_of_states) {
+      weighted_panel[, j] <- (weighted_panel[, j] - min(weighted_panel[, j]))
+      weighted_panel[, j] <- weighted_panel[, j] / (max(weighted_panel[, j]))
+    }
+    
+    #calculate score values used for ordering the columns in a advantageous way for the detection of admissibility
+    weights <- ((number_of_acts - 1):0)
+    weighted_panel <- weights * weighted_panel / sum(weights)
+    weighted_panel_colSums <- colSums(weighted_panel)
+    
+    if (mode == "utility") {
+      panel <- panel[, order(weighted_panel_colSums, decreasing = FALSE)]
+    }
+    if (mode == "loss") {
+      panel <- panel[, order(weighted_panel_colSums, decreasing = TRUE)]
+    }
+  }
+  
+  # algorithm for admissible acts according to strong dominance
+  if (strong_domination == TRUE) {
+    if (mode == "utility") {
+      i <- 1
+      while (i < length(row_sums)) {
+        j <- i + 1
+        while (j <= length(row_sums)) {
+          #reminder saves if there is a state for which act j performs better than or at least as good as act i 
+          reminder <- FALSE
+          for (k in 1:number_of_states) {
+            if (panel[row_sums[j], k] >= panel[row_sums[i], k]) {
+              reminder <- TRUE
+              break
+            }
+          }
+          if (reminder == FALSE) {
+            #if reminder is FALSE at the end of the loop, act j is strongly dominated by act i 
+            row_sums <- row_sums[-j]
+            j <- j - 1
+          }
+          j <- j + 1
+        }
+        i <- i + 1
+      }
+    }
+    else if (mode == "loss") {
+      i <- 1
+      while (i < length(row_sums)) {
+        j <- i + 1
+        while (j <= length(row_sums)) {
+          reminder <- FALSE
+          for (k in 1:number_of_states) {
+            if (panel[row_sums[j], k] <= panel[row_sums[i], k]) {
+              reminder <- TRUE
+              break
+            }
+          }
+          if (reminder == FALSE) {
+            row_sums <- row_sums[-j]
+            j <- j - 1
+          }
+          j <- j + 1
+        }
+        i <- i + 1
+      }
+    }
+  }
+  else {
+    if (exclude_duplicates == FALSE) { 
+      # algorithm for admissible acts according to strict dominance
+      if (mode == "utility") {
+        i <- 1
+        while (i < length(row_sums)) {
+          j <- i + 1
+          while (j <= length(row_sums)) {
+            #in addition to saving if act j has been better than act i in at least one state, one also has to save if the opposite happened 
+            reminder_equal <- TRUE
+            reminder <- FALSE
+            for (k in 1:number_of_states) {
+              if (panel[row_sums[j], k] > panel[row_sums[i], k]) {
+                reminder <- TRUE
+                break
+              }
+              else if (panel[row_sums[j], k] < panel[row_sums[i], k]) {
+                reminder_equal <- FALSE
+              }
+            }
+            #if act j has not been better than act i in any state and act i has been better than act j in any state, act j is strictly dominated by act i 
+            if (reminder == FALSE) {
+              if (reminder_equal == FALSE) {
+                row_sums <- row_sums[-j]
+                j <- j - 1
+              }
+            }
+            j <- j + 1
+          }
+          i <- i + 1
+        }
+      }
+      else if (mode == "loss") {
+        i <- 1
+        while (i < length(row_sums)) {
+          j <- i + 1
+          while (j <= length(row_sums)) {
+            reminder_equal <- TRUE
+            reminder <- FALSE
+            for (k in 1:number_of_states) {
+              if (panel[row_sums[j], k] < panel[row_sums[i], k]) {
+                reminder <- TRUE
+                break
+              }
+              else if (panel[row_sums[j], k] > panel[row_sums[i], k]) {
+                reminder_equal <- FALSE
+              }
+            }
+            if (reminder == FALSE) {
+              if (reminder_equal == FALSE) {
+                row_sums <- row_sums[-j]
+                j <- j - 1
+              }
+            }
+            j <- j + 1
+          }
+          i <- i + 1
+        }
+      }
+    }
+    else if (exclude_duplicates == TRUE) { 
+      # algorithm for admissible acts according to weak dominance (only one duplicate will remain)
+      if (mode == "utility") {
+        i <- 1
+        while (i < length(row_sums)) {
+          j <- i + 1
+          while (j <= length(row_sums)) {
+            #remember if act j has been better than act i in at least one state
+            reminder <- FALSE
+            for (k in 1:number_of_states) {
+              if (panel[row_sums[j], k] > panel[row_sums[i], k]) {
+                reminder <- TRUE
+                break
+              }
+            }
+            #if act j has not been better than act i in any state, act j will be excluded (could be equivalent to act i)
+            if (reminder == FALSE) {
+              row_sums <- row_sums[-j]
+              j <- j - 1
+            }
+            j <- j + 1
+          }
+          i <- i + 1
+        }
+      }
+      else if (mode == "loss") {
+        i <- 1
+        while (i < length(row_sums)) {
+          j <- i + 1
+          while (j <= length(row_sums)) {
+            reminder <- FALSE
+            for (k in 1:number_of_states) {
+              if (panel[row_sums[j], k] < panel[row_sums[i], k]) {
+                reminder <- TRUE
+                break
+              }
+            }
+            if (reminder == FALSE) {
+              row_sums <- row_sums[-j]
+              j <- j - 1
+            }
+            j <- j + 1
+          }
+          i <- i + 1
+        }
+      }
+    }
+  }
+  return(row_sums)
+}
 
 #function to compute the set of extreme points for imprecise probabilities
 extreme_point_finder_rcdd <- function(number_of_states, a1 = NULL, b1 = NULL, a2 = NULL, b2 = NULL, boundaries = matrix(c(0, 1), nrow = number_of_states, ncol = 2, byrow = TRUE), ordinal_structure = NULL) {
@@ -289,9 +747,6 @@ m_maximality_lp <- function(utility_table,  mode = c("utility","loss"), a1 = NUL
   number_of_acts <- nrow(utility_table)
   number_of_states <- ncol(utility_table)
   
-  # compute a H-representation of all the constraints based on the probabilistic information
-  hrep <- generate_probability_constraints(number_of_states, a1, a2, b1, b2, boundaries, ordinal_structure)
-  
   for (i in setdiff(1:number_of_acts, e_admissible_indices)) {
     # constraints for comparing distinct acts and to bind the sum of states' probabilities to a maximum of 1
     if (mode == "utility") {
@@ -310,6 +765,9 @@ m_maximality_lp <- function(utility_table,  mode = c("utility","loss"), a1 = NUL
       constr_mat[2 * j, col_indizes] <- rep(1, number_of_states)
     }
     constr_vec <- rep(c(0, 1), number_of_acts - 1)
+    
+    #compute a H-representation of all the constraints based on the probabilistic information
+    hrep <- generate_probability_constraints(number_of_states, a1, a2, b1, b2, boundaries, ordinal_structure)
     
     # transforming the H-representation into a constraint-matrix, a constraint-vector and constraint directions for lpSolve
     for (j in 1:nrow(hrep)) {
@@ -338,72 +796,8 @@ m_maximality_lp <- function(utility_table,  mode = c("utility","loss"), a1 = NUL
   return(output)
 }
 
-# function to compute the M-maximal acts through linear optimization
-m_maximality_lp_parallel <- function(utility_table,  mode = c("utility","loss"), a1 = NULL, b1 = NULL, a2 = NULL, b2 = NULL, ordinal_structure = NULL, boundaries = matrix(c(0, 1), nrow = ncol(utility_table), ncol = 2, byrow = TRUE)) {
-  number_of_states <- ncol(utility_table)
-  
-  # since detecting E-admissibility is faster than detecting M-maximality one can exclude these acts before starting
-  e_admissible_acts <- e_admissibility(utility_table, mode, "none", a1, b1, a2, b2, ordinal_structure, boundaries)
-  e_admissible_indices <- row.names(e_admissible_acts) %>% as.integer()
-  
-  number_of_acts <- nrow(utility_table)
-  number_of_states <- ncol(utility_table)
-  
-  # compute a H-representation of all the constraints based on the probabilistic information
-  hrep <- generate_probability_constraints(number_of_states, a1, a2, b1, b2, boundaries, ordinal_structure)
-  
-  # solve with parallelisation
-  m_maximal <- foreach(i = setdiff(1:number_of_acts, e_admissible_indices),
-                      .combine = "c",
-                      .packages = "lpSolve") %dopar% {
-    # constraints for comparing distinct acts and to bind the sum of states' probabilities to a maximum of 1
-    if (mode == "utility") {
-      constr_dir <- rep(c("<=", "<="), number_of_acts - 1)
-    }
-    else if (mode == "loss") {
-      constr_dir <- rep(c(">=", "<="), number_of_acts - 1)
-    }
-    constr_mat <- matrix(0, 2 * (number_of_acts - 1), (number_of_acts - 1) * number_of_states)
-    number_of_var <- ncol(constr_mat)
-    utility_table_woi <- rbind(utility_table[-i, ])
-    utility_table_i <- rbind(utility_table[i, ])
-    for (j in 1:(number_of_acts - 1)) {
-      col_indizes <- ((j - 1) * number_of_states + 1):(j * number_of_states)
-      constr_mat[2 * j - 1, col_indizes] <- rbind(utility_table_woi[j, ] - utility_table_i)
-      constr_mat[2 * j, col_indizes] <- rep(1, number_of_states)
-    }
-    constr_vec <- rep(c(0, 1), number_of_acts - 1)
-    
-    # transforming the H-representation into a constraint-matrix, a constraint-vector and constraint directions for lpSolve
-    for (j in 1:nrow(hrep)) {
-      for (k in 1:(number_of_acts - 1)) {
-        constr_mat <- rbind(constr_mat, rep(0, number_of_var))
-        col_indizes <- ((k - 1) * number_of_states + 1):(k * number_of_states)
-        constr_mat[nrow(constr_mat), col_indizes] <- hrep[j, -(1:2)] * (-1)
-        constr_vec <- c(constr_vec, hrep[j, 2])
-      }
-    }
-    constr_dir <- c(constr_dir, rep("<=", nrow(hrep) * (number_of_acts - 1)))
-    
-    # one optimizes over the sum of all optimization parameters or all probabilities for each comparison
-    objective <- c(rep(1, number_of_states * (number_of_acts - 1)))
-    
-    # if optimal value is equal to the number of acts - 1, then act i can be considered as M-maximal
-    # (rounding is required because there are small indifferences when optimizing)
-    if (round(lp(direction = "max", objective, constr_mat, constr_dir, constr_vec)$objval, 10) == (number_of_acts - 1)) {
-      return(i)
-    }
-    return()
-  }
-  #E-admissible acts are also M-maximal
-  m_maximal <- c(m_maximal, e_admissible_indices)
-  output <- rbind(utility_table[m_maximal, ])
-  row.names(output) <- row.names(utility_table)[m_maximal]
-  return(output)
-}
-
 # function to compute the M-maximal acts
-m_maximality <- function(panel, mode = c("utility","loss"), method = c("ep", "lp", "lppar"), filter_admissible = TRUE, a1 = NULL, b1 = NULL, a2 = NULL, b2 = NULL, ordinal_structure = NULL, boundaries = matrix(c(0, 1), nrow = ncol(panel), ncol = 2, byrow = TRUE)) {
+m_maximality <- function(panel, mode = c("utility","loss"), method = c("ep", "lp"), filter_admissible = TRUE, a1 = NULL, b1 = NULL, a2 = NULL, b2 = NULL, ordinal_structure = NULL, boundaries = matrix(c(0, 1), nrow = ncol(panel), ncol = 2, byrow = TRUE)) {
   
   # check method to be a valid value
   method <- match.arg(method)
@@ -444,11 +838,8 @@ m_maximality <- function(panel, mode = c("utility","loss"), method = c("ep", "lp
   if (method == "ep") { # method for m_maximality through applying strict dominance on the utility of acts VS extreme points
     return(m_maximality_ep(utility_table, mode, a1, b1, a2, b2, ordinal_structure, boundaries))
   }
-  if (method == "lp") { # method for m_maximality according to Jansen, 2018, computed by lpSolve
+  else if (method == "lp") { # method for m_maximality according to Jansen, 2018, computed by lpSolve
     return(m_maximality_lp(utility_table, mode, a1, b1, a2, b2, ordinal_structure, boundaries))
-  }
-  if (method == "lppar") { # method for m_maximality according to Jansen, 2018, computed by lpSolve
-    return(m_maximality_lp_parallel(utility_table, mode, a1, b1, a2, b2, ordinal_structure, boundaries))
   }
 }
 
